@@ -2,7 +2,9 @@
 
 A compact ESP32-S3 project for the LilyGo T-Display S3 showing live cryptocurrency prices (via CoinGecko) on the built-in ST7789 TFT display.
 
-This project was developed with the assistance of **ChatGPT (OpenAI)**.
+I recently started buying some cryptocurrencies and found myself checking my smartphone so often that I thought it would be cool to have a small display to track the market without the distraction of a phone. I had a T-Display lying around, and with the help of AI, the idea became reality just a few hours later.
+
+disclaimer: This project was developed with the assistance of **ChatGPT (OpenAI)**.
 
 ![T-Display S3 running Crypto Ticker](docs/display.jpg)
 
