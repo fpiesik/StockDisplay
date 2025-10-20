@@ -23,6 +23,8 @@
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <Preferences.h>
+#include <esp_adc_cal.h>
+#include <math.h>
 #include <time.h>         // NTP / Zeitfunktionen
 
 
@@ -33,6 +35,7 @@ Preferences prefs;
 const unsigned long REFRESH_MS = 60UL * 1000UL; // Update-Intervall
 const int BTN_ROTATE = 0;   // linker Knopf
 const int BTN_BRIGHT = 14;  // rechter Knopf
+const int PIN_BAT_VOLT = 4; // Akku-Messung
 
 // Display
 int currentRotation = 1;    // 1 = Kabel rechts, 3 = Kabel links
@@ -72,6 +75,13 @@ int16_t FOOTER_H  = 18;
 int16_t CONTENT_Y, CONTENT_H;
 int16_t ROWS = 4, ROW_H, MARGIN = 6;
 int16_t COL_SYMBOL_X, COL_PRICE_XR, COL_CHG_XR;
+
+// Batterie-Anzeige
+const unsigned long BATTERY_REFRESH_MS = 10UL * 1000UL; // alle 10 s aktualisieren
+const uint32_t BATTERY_USB_THRESHOLD_MV = 4300;
+bool batteryValid = false;
+bool batteryPresent = false;
+float batteryVoltage = 0.0f;
 
 // Kursdaten
 struct Quote {
@@ -174,11 +184,59 @@ void drawRow(uint8_t idx, const Quote& q) {
   tft.drawString(String(pctBuf), COL_CHG_XR, y + 2, 4);
 }
 
-void drawFooterTimestamp() {
+String batteryStatusText() {
+  if (!batteryValid) return String("Batt: --");
+  if (!batteryPresent) return String("Batt: USB");
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "Batt: %.2fV", batteryVoltage);
+  return String(buf);
+}
+
+void drawFooter() {
   tft.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, TFT_DARKGREY);
   tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString(batteryStatusText(), MARGIN, SCREEN_H - FOOTER_H + 2, 2);
+
   tft.setTextDatum(TR_DATUM);
   tft.drawString("Aktualisiert: " + nowTime(), SCREEN_W - 4, SCREEN_H - FOOTER_H + 2, 2);
+}
+
+bool updateBattery(bool force = false) {
+  static unsigned long lastSample = 0;
+  static esp_adc_cal_characteristics_t adcChars;
+  static bool adcInit = false;
+
+  unsigned long now = millis();
+  if (!force && batteryValid && (now - lastSample) < BATTERY_REFRESH_MS) {
+    return false;
+  }
+
+  lastSample = now;
+
+  if (!adcInit) {
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adcChars);
+    adcInit = true;
+  }
+
+  uint32_t raw = analogRead(PIN_BAT_VOLT);
+  uint32_t mv = esp_adc_cal_raw_to_voltage(raw, &adcChars) * 2; // Spannungsteiler 1/2
+
+  bool prevValid = batteryValid;
+  bool prevPresent = batteryPresent;
+  float prevVoltage = batteryVoltage;
+
+  batteryValid = true;
+  batteryPresent = (mv <= BATTERY_USB_THRESHOLD_MV);
+  batteryVoltage = mv / 1000.0f;
+
+  if (!prevValid) return true;
+  if (prevPresent != batteryPresent) return true;
+  if (fabsf(prevVoltage - batteryVoltage) > 0.02f) return true; // >20 mV Unterschied
+
+  return false;
 }
 
 // =================== SETTINGS (PERSISTENT) ===================
@@ -216,7 +274,8 @@ void redrawAll() {
   tft.fillScreen(TFT_BLACK);
   drawHeader();
   for (uint8_t i = 0; i < ROWS; i++) drawRow(i, quotes[i]);
-  drawFooterTimestamp();
+  updateBattery(true);
+  drawFooter();
 }
 
 void toggleRotation() {
@@ -241,7 +300,7 @@ void nextBrightness() {
   Serial.printf("Helligkeit auf Stufe %d\n", brightnessLevel);
 
   // kleine Anzeige im Footer
-  tft.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, TFT_DARKGREY);
+  drawFooter();
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
   tft.drawString("Brightness " + String(brightnessLevel), SCREEN_W/2, SCREEN_H - FOOTER_H/2, 2);
@@ -471,6 +530,10 @@ void setup() {
 
   pinMode(BTN_ROTATE, INPUT_PULLUP);
   pinMode(BTN_BRIGHT, INPUT_PULLUP);
+  pinMode(PIN_BAT_VOLT, INPUT);
+
+  analogReadResolution(12);
+  analogSetPinAttenuation(PIN_BAT_VOLT, ADC_11db);
 
   tft.init();                          // <-- Display zuerst initialisieren
   tft.setRotation(currentRotation);
@@ -495,7 +558,8 @@ void setup() {
   drawHeader();
   fetchQuotesAll(quotes, NUM_SYMBOLS);
   for (uint8_t i=0;i<ROWS;i++) drawRow(i, quotes[i]);
-  drawFooterTimestamp();
+  updateBattery(true);
+  drawFooter();
   lastRefresh = millis();
 
   Serial.println();
@@ -508,6 +572,10 @@ void setup() {
 void loop() {
   // Serielle Kommandos
   handleSerialCommands();
+
+  if (updateBattery()) {
+    drawFooter();
+  }
 
   // Rotation
   bool btnRot = digitalRead(BTN_ROTATE);
@@ -525,7 +593,7 @@ void loop() {
     if (fetchQuotesAll(quotes, NUM_SYMBOLS)) {
       drawHeader();
       for (uint8_t i=0;i<ROWS;i++) drawRow(i, quotes[i]);
-      drawFooterTimestamp();
+      drawFooter();
     }
     lastRefresh = millis();
   }
