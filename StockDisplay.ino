@@ -462,6 +462,10 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
+  //turn display on in case only battery is attached
+  pinMode(15, OUTPUT);
+  digitalWrite(15, HIGH);
+  
   prefs.begin("display", false);
   loadSettings();                      // <-- zuerst laden!
 
