@@ -4,7 +4,7 @@ A compact ESP32-S3 project for the LilyGo T-Display S3 showing live cryptocurren
 
 I recently started buying some cryptocurrencies and found myself checking my smartphone so often that I thought it would be cool to have a small display to track the market without the distraction of a phone. I had a T-Display lying around, and with the help of AI, the idea became reality just a few hours later.
 
-disclaimer: This project was developed with the assistance of **ChatGPT (OpenAI)**.
+## Disclaimer: This project was developed with the assistance of **ChatGPT (OpenAI)**.
 
 ![T-Display S3 running Crypto Ticker](docs/display.jpg)
 
@@ -119,17 +119,6 @@ Recommended (≤ 26 × 62 mm):
 | 602540 | ~600 mAh | 6 × 25 × 40 | Compact option |
 
 Use only 1S (3.7 V nominal) LiPo with JST-GH 1.25 mm 2-pin connector.
-
----
-
-## 🧠 Common Pitfalls
-
-- “Piano-striped” display edge → wrong rotation (use 1 or 3)
-- Offsets ignored → wrong TFT_eSPI library
-- HTTP 401 → switch to CoinGecko API
-- Brightness not changing → PWM must be set after tft.init()
-- Time = 0:00:00 → no NTP sync
-- Port greyed out → use ESP32 core 2.0.17
 
 ---
 
