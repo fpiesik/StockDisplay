@@ -65,6 +65,19 @@ const unsigned long debounceDelay = 150;
 // WLAN + Assets
 String WIFI_SSID = "";
 String WIFI_PASS = "";
+const uint8_t WIFI_PROFILE_LIMIT = 5;   // maximale Anzahl gemerkter WLANs
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+const unsigned long WIFI_RECONNECT_COOLDOWN_MS = 15000;
+
+struct WiFiProfile {
+  String ssid;
+  String pass;
+};
+
+WiFiProfile wifiProfiles[WIFI_PROFILE_LIMIT];
+uint8_t wifiProfileCount = 0;
+int currentWifiProfile = -1;
+unsigned long lastWifiReconnectAttempt = 0;
 String symbols[4] = {"BTC-USD", "SOL-USD", "ETH-USD", "ADA-USD"};
 const uint8_t NUM_SYMBOLS = sizeof(symbols) / sizeof(symbols[0]);
 
@@ -239,12 +252,111 @@ bool updateBattery(bool force = false) {
   return false;
 }
 
+void persistWifiProfiles() {
+  String list = "";
+  for (uint8_t i = 0; i < wifiProfileCount && i < WIFI_PROFILE_LIMIT; ++i) {
+    if (wifiProfiles[i].ssid.length() == 0) continue;
+    if (list.length()) list += '\n';
+    list += wifiProfiles[i].ssid;
+    list += '\t';
+    list += wifiProfiles[i].pass;
+  }
+
+  prefs.putString("wifi_list", list);
+  if (wifiProfileCount > 0) {
+    prefs.putString("wifi_ssid", wifiProfiles[0].ssid);
+    prefs.putString("wifi_pass", wifiProfiles[0].pass);
+  } else {
+    prefs.putString("wifi_ssid", "");
+    prefs.putString("wifi_pass", "");
+  }
+}
+
+void loadWifiProfiles() {
+  wifiProfileCount = 0;
+  String list = prefs.getString("wifi_list", "");
+  int start = 0;
+  while (start < list.length() && wifiProfileCount < WIFI_PROFILE_LIMIT) {
+    int end = list.indexOf('\n', start);
+    if (end < 0) end = list.length();
+    String line = list.substring(start, end);
+    int sep = line.indexOf('\t');
+    if (sep >= 0) {
+      String ssid = line.substring(0, sep);
+      String pass = line.substring(sep + 1);
+      if (ssid.length() > 0) {
+        wifiProfiles[wifiProfileCount].ssid = ssid;
+        wifiProfiles[wifiProfileCount].pass = pass;
+        wifiProfileCount++;
+      }
+    }
+    start = end + 1;
+  }
+
+  if (wifiProfileCount == 0) {
+    String legacySsid = prefs.getString("wifi_ssid", "");
+    String legacyPass = prefs.getString("wifi_pass", "");
+    if (legacySsid.length() > 0) {
+      wifiProfiles[0].ssid = legacySsid;
+      wifiProfiles[0].pass = legacyPass;
+      wifiProfileCount = 1;
+    }
+  }
+
+  if (wifiProfileCount > 0) {
+    WIFI_SSID = wifiProfiles[0].ssid;
+    WIFI_PASS = wifiProfiles[0].pass;
+    currentWifiProfile = 0;
+  } else {
+    WIFI_SSID = "";
+    WIFI_PASS = "";
+    currentWifiProfile = -1;
+  }
+}
+
+void addOrPromoteWifiCredential(const String& ssid, const String& pass, bool persist = true) {
+  if (ssid.length() == 0) return;
+
+  int existing = -1;
+  for (uint8_t i = 0; i < wifiProfileCount; ++i) {
+    if (wifiProfiles[i].ssid == ssid) {
+      existing = i;
+      break;
+    }
+  }
+
+  if (existing >= 0) {
+    wifiProfiles[existing].pass = pass;
+    WiFiProfile entry = wifiProfiles[existing];
+    for (int i = existing; i > 0; --i) {
+      wifiProfiles[i] = wifiProfiles[i - 1];
+    }
+    wifiProfiles[0] = entry;
+  } else {
+    if (wifiProfileCount < WIFI_PROFILE_LIMIT) {
+      wifiProfileCount++;
+    }
+    for (int i = wifiProfileCount - 1; i > 0; --i) {
+      wifiProfiles[i] = wifiProfiles[i - 1];
+    }
+    wifiProfiles[0].ssid = ssid;
+    wifiProfiles[0].pass = pass;
+  }
+
+  WIFI_SSID = wifiProfiles[0].ssid;
+  WIFI_PASS = wifiProfiles[0].pass;
+  currentWifiProfile = 0;
+
+  if (persist) {
+    persistWifiProfiles();
+  }
+}
+
 // =================== SETTINGS (PERSISTENT) ===================
 void saveSettings() {
   prefs.putInt("rotation", currentRotation);
   prefs.putInt("brightness", brightnessLevel);
-  prefs.putString("wifi_ssid", WIFI_SSID);
-  prefs.putString("wifi_pass", WIFI_PASS);
+  persistWifiProfiles();
   // Assets speichern (Komma-Liste)
   String aset = "";
   for (uint8_t i=0;i<NUM_SYMBOLS;i++){
@@ -257,8 +369,7 @@ void saveSettings() {
 void loadSettings() {
   currentRotation = prefs.getInt("rotation", 1);
   brightnessLevel = prefs.getInt("brightness", 3);
-  WIFI_SSID = prefs.getString("wifi_ssid", "");
-  WIFI_PASS = prefs.getString("wifi_pass", "");
+  loadWifiProfiles();
   String assetStr = prefs.getString("assets", "BTC-USD,SOL-USD,ETH-USD,ADA-USD");
   int idx = 0;
   while (assetStr.length() > 0 && idx < NUM_SYMBOLS) {
@@ -313,34 +424,32 @@ void askForWiFiCredentials() {
   Serial.println("Bitte SSID eingeben (Enter): ");
   while (Serial.available()) Serial.read();
   while (Serial.available() == 0) delay(10);
-  WIFI_SSID = Serial.readStringUntil('\n'); WIFI_SSID.trim();
+  String ssid = Serial.readStringUntil('\n'); ssid.trim();
 
   Serial.println("Bitte Passwort eingeben (Enter): ");
   while (Serial.available()) Serial.read();
   while (Serial.available() == 0) delay(10);
-  WIFI_PASS = Serial.readStringUntil('\n'); WIFI_PASS.trim();
+  String pass = Serial.readStringUntil('\n'); pass.trim();
 
-  prefs.putString("wifi_ssid", WIFI_SSID);
-  prefs.putString("wifi_pass", WIFI_PASS);
+  addOrPromoteWifiCredential(ssid, pass, true);
   Serial.println("✅ WLAN-Daten gespeichert!");
 }
 
-void connectWiFi() {
-  if (WIFI_SSID == "" || WIFI_PASS == "") {
-    askForWiFiCredentials();
-  }
+bool attemptWiFiProfile(uint8_t idx) {
+  if (idx >= wifiProfileCount) return false;
+  const String& ssid = wifiProfiles[idx].ssid;
+  const String& pass = wifiProfiles[idx].pass;
+  if (ssid.length() == 0) return false;
 
   Serial.println();
-  Serial.println("🔌 Verwende gespeicherte WLAN-Daten:");
-  Serial.print("SSID: "); Serial.println(WIFI_SSID);
-  Serial.println("(Passwort ausgeblendet)");
+  Serial.print("🔌 Verbinde mit: ");
+  Serial.println(ssid);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID.c_str(), WIFI_PASS.c_str());
+  WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.print("Verbindung herstellen ...");
 
   unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_CONNECT_TIMEOUT_MS) {
     Serial.print(".");
     delay(500);
   }
@@ -349,11 +458,45 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("✅ Verbunden! IP: "); Serial.println(WiFi.localIP());
     drawStatus("WLAN: " + WiFi.localIP().toString());
-  } else {
-    Serial.println("❌ Verbindung fehlgeschlagen.");
-    askForWiFiCredentials();
-    connectWiFi();
+    addOrPromoteWifiCredential(ssid, pass, true);
+    return true;
   }
+
+  Serial.println("❌ Verbindung fehlgeschlagen.");
+  return false;
+}
+
+bool connectWiFi(bool interactive = true) {
+  if (wifiProfileCount == 0) {
+    if (!interactive) return false;
+    askForWiFiCredentials();
+  }
+
+  while (wifiProfileCount > 0) {
+    Serial.println();
+    Serial.println("🔌 Verwende gespeicherte WLAN-Daten:");
+    for (uint8_t i = 0; i < wifiProfileCount; ++i) {
+      Serial.printf("  %d/%d: %s\n", i + 1, wifiProfileCount, wifiProfiles[i].ssid.c_str());
+    }
+
+    WiFi.mode(WIFI_STA);
+
+    for (uint8_t i = 0; i < wifiProfileCount; ++i) {
+      WiFi.disconnect(true);
+      delay(100);
+      if (attemptWiFiProfile(i)) {
+        currentWifiProfile = 0;
+        lastWifiReconnectAttempt = millis();
+        return true;
+      }
+    }
+
+    if (!interactive) break;
+    Serial.println("❌ Keine gespeicherten WLANs erreichbar. Bitte neue Daten eingeben.");
+    askForWiFiCredentials();
+  }
+
+  return false;
 }
 
 void setupTime() {
@@ -507,8 +650,11 @@ void handleSerialCommands() {
   }
 
   if (line.equalsIgnoreCase("RESET_WIFI")) {
-    prefs.putString("wifi_ssid", "");
-    prefs.putString("wifi_pass", "");
+    wifiProfileCount = 0;
+    WIFI_SSID = "";
+    WIFI_PASS = "";
+    currentWifiProfile = -1;
+    persistWifiProfiles();
     Serial.println("🔄 WLAN-Daten gelöscht. Bitte neu starten (Reset).");
     return;
   }
@@ -551,7 +697,10 @@ void setup() {
   ROW_H = CONTENT_H / ROWS;
   COL_SYMBOL_X = MARGIN;   COL_PRICE_XR = SCREEN_W - 88;  COL_CHG_XR = SCREEN_W - MARGIN;
 
-  connectWiFi();
+  while (!connectWiFi(true)) {
+    drawStatus("WLAN: keine Verbindung");
+    delay(1000);
+  }
 
   setupTime();
 
@@ -572,6 +721,19 @@ void setup() {
 void loop() {
   // Serielle Kommandos
   handleSerialCommands();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    unsigned long now = millis();
+    if (now - lastWifiReconnectAttempt > WIFI_RECONNECT_COOLDOWN_MS) {
+      Serial.println("📶 WLAN getrennt. Versuche gespeicherte Netzwerke...");
+      drawStatus("WLAN: neu verbinden...");
+      bool connected = connectWiFi(false);
+      lastWifiReconnectAttempt = millis();
+      if (!connected) {
+        drawStatus("WLAN: getrennt");
+      }
+    }
+  }
 
   if (updateBattery()) {
     drawFooter();
