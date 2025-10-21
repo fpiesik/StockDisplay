@@ -8,6 +8,7 @@
     - WLAN per Serial eingeben, Assets per Serial ändern:
         ASSETS?                          -> zeigt aktuelle Liste
         SET_ASSETS BTC-USD,ETH-USD,...   -> setzt 1..4 Symbole (Komma-getrennt)
+        ADD_WIFI                         -> neues WLAN hinzufügen
         RESET_WIFI                       -> WLAN-Zugangsdaten löschen
   Voraussetzungen:
     - ESP32 Core 2.0.17
@@ -418,9 +419,11 @@ void nextBrightness() {
 }
 
 // =================== WLAN ===================
-void askForWiFiCredentials() {
+void askForWiFiCredentials(const char* introMessage = "⚙️ WLAN nicht verbunden.") {
   Serial.println();
-  Serial.println("⚙️ WLAN nicht verbunden.");
+  if (introMessage && introMessage[0] != '\0') {
+    Serial.println(introMessage);
+  }
   Serial.println("Bitte SSID eingeben (Enter): ");
   while (Serial.available()) Serial.read();
   while (Serial.available() == 0) delay(10);
@@ -649,6 +652,20 @@ void handleSerialCommands() {
     return;
   }
 
+  if (line.equalsIgnoreCase("ADD_WIFI")) {
+    bool wasConnected = (WiFi.status() == WL_CONNECTED);
+    askForWiFiCredentials("➕ Neues WLAN hinzufügen.");
+    if (wasConnected) {
+      Serial.println("ℹ️ Aktuelle Verbindung bleibt bestehen. Neues WLAN wird bei Bedarf genutzt.");
+    } else {
+      Serial.println("🔁 Versuche sofort, mit gespeicherten WLANs zu verbinden...");
+      if (!connectWiFi(false)) {
+        Serial.println("⚠️ Keine Verbindung möglich. Es wird automatisch weiter versucht.");
+      }
+    }
+    return;
+  }
+
   if (line.equalsIgnoreCase("RESET_WIFI")) {
     wifiProfileCount = 0;
     WIFI_SSID = "";
@@ -659,7 +676,7 @@ void handleSerialCommands() {
     return;
   }
 
-  Serial.println("Unbekannter Befehl. Verfügbar: ASSETS? | SET_ASSETS ... | RESET_WIFI");
+  Serial.println("Unbekannter Befehl. Verfügbar: ASSETS? | SET_ASSETS ... | ADD_WIFI | RESET_WIFI");
 }
 
 // =================== SETUP & LOOP ===================
@@ -715,6 +732,7 @@ void setup() {
   Serial.println("Befehle:");
   Serial.println("  ASSETS?                      -> aktuelle Assetliste");
   Serial.println("  SET_ASSETS BTC-USD,ETH-USD  -> neue Liste setzen (1..4)");
+  Serial.println("  ADD_WIFI                    -> weiteres WLAN speichern");
   Serial.println("  RESET_WIFI                   -> WLAN-Daten löschen");
 }
 
