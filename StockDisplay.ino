@@ -143,9 +143,17 @@ void drawHeader() {
   tft.setTextDatum(TL_DATUM);
   tft.drawString("Symbol", MARGIN, HEADER_H - 16, 2);
 
+  const int16_t headerLabelY = HEADER_H - 16;
+  const int priceFont = 2;
+  const int16_t priceLabelWidth = tft.textWidth("Preis", priceFont);
+
   tft.setTextDatum(TR_DATUM);
-  tft.drawString("Ref Preis", COL_PRICE_XR, HEADER_H - 16, 2);
-  tft.drawString("Δ Fix", COL_CHG_XR,   HEADER_H - 16, 2);
+  tft.drawString("Preis", COL_PRICE_XR, headerLabelY, priceFont);
+
+  const int16_t refLabelX = COL_PRICE_XR - priceLabelWidth - 6;
+  tft.drawString("Ref", refLabelX, headerLabelY, priceFont);
+
+  tft.drawString("Δ Fix", COL_CHG_XR,   headerLabelY, priceFont);
 }
 
 String nowTime() {
@@ -239,27 +247,36 @@ void drawRow(uint8_t idx, const Quote& q) {
   tft.setTextColor(TFT_CYAN, bg);
   tft.drawString(shortSymbol(symbols[idx]), COL_SYMBOL_X, y + h / 2, 4);
 
+  const int priceFont = 4;
+  const int refFont = 2;
+  const int priceHeight = tft.fontHeight(priceFont);
+  const int refHeight = tft.fontHeight(refFont);
+  const int priceBaseline = y + h - 2;
+  int refBaseline = priceBaseline - priceHeight - 4;
+  const int minRefBaseline = y + refHeight + 2;
+  if (refBaseline < minRefBaseline) refBaseline = minRefBaseline;
+
   if (!q.ok || isnan(q.price)) {
     tft.setTextColor(TFT_LIGHTGREY, bg);
-    tft.setTextDatum(TR_DATUM);
-    tft.drawString(formatPriceCompact(basePrices[idx]), COL_PRICE_XR, y + 2, 2);
+    tft.setTextDatum(BR_DATUM);
+    tft.drawString(formatPriceCompact(basePrices[idx]), COL_PRICE_XR, refBaseline, refFont);
     tft.setTextColor(TFT_RED, bg);
     tft.setTextDatum(BR_DATUM);
-    tft.drawString("n/a", COL_PRICE_XR, y + h - 2, 4);
+    tft.drawString("n/a", COL_PRICE_XR, priceBaseline, priceFont);
     tft.setTextColor(TFT_LIGHTGREY, bg);
     tft.setTextDatum(BR_DATUM);
-    tft.drawString("--",  COL_CHG_XR,   y + h - 2, 4);
+    tft.drawString("--",  COL_CHG_XR,   priceBaseline, priceFont);
     return;
   }
 
   double base = basePrices[idx];
   tft.setTextColor(TFT_LIGHTGREY, bg);
-  tft.setTextDatum(TR_DATUM);
-  tft.drawString(formatPriceCompact(base), COL_PRICE_XR, y + 2, 2);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(formatPriceCompact(base), COL_PRICE_XR, refBaseline, refFont);
 
   tft.setTextColor(TFT_WHITE, bg);
   tft.setTextDatum(BR_DATUM);
-  tft.drawString(formatPriceCompact(q.price), COL_PRICE_XR, y + h - 2, 4);
+  tft.drawString(formatPriceCompact(q.price), COL_PRICE_XR, priceBaseline, priceFont);
 
   double change = changeFromBase(idx, q.price);
   uint16_t col = TFT_LIGHTGREY;
