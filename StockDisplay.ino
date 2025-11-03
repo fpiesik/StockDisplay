@@ -90,6 +90,7 @@ int16_t FOOTER_H  = 18;
 int16_t CONTENT_Y, CONTENT_H;
 int16_t ROWS = 4, ROW_H, MARGIN = 6;
 int16_t COL_SYMBOL_X, COL_PRICE_XR, COL_CHG_XR;
+const int16_t PRICE_BASE_SPACING = 6;
 
 // Batterie-Anzeige
 const unsigned long BATTERY_REFRESH_MS = 10UL * 1000UL; // alle 10 s aktualisieren
@@ -150,7 +151,9 @@ void drawHeader() {
   tft.setTextDatum(TR_DATUM);
   tft.drawString("Preis", COL_PRICE_XR, headerLabelY, priceFont);
 
-  const int16_t refLabelX = COL_PRICE_XR - priceLabelWidth - 6;
+  int16_t refLabelX = COL_PRICE_XR - priceLabelWidth - PRICE_BASE_SPACING;
+  int16_t minRefX = COL_SYMBOL_X + 40;
+  if (refLabelX < minRefX) refLabelX = minRefX;
   tft.drawString("Ref", refLabelX, headerLabelY, priceFont);
 
   tft.drawString("Δ Fix", COL_CHG_XR,   headerLabelY, priceFont);
@@ -249,34 +252,38 @@ void drawRow(uint8_t idx, const Quote& q) {
 
   const int priceFont = 4;
   const int refFont = 2;
-  const int priceHeight = tft.fontHeight(priceFont);
-  const int refHeight = tft.fontHeight(refFont);
   const int priceBaseline = y + h - 2;
-  int refBaseline = priceBaseline - priceHeight - 4;
-  const int minRefBaseline = y + refHeight + 2;
-  if (refBaseline < minRefBaseline) refBaseline = minRefBaseline;
+
+  double base = basePrices[idx];
+  bool hasBase = (!isnan(base) && base > 0.0);
+  String baseText = hasBase ? formatPriceCompact(base) : String("--");
+  uint16_t baseColor = hasBase ? TFT_LIGHTGREY : tft.color565(60, 60, 60);
+
+  String priceText = q.ok && !isnan(q.price) ? formatPriceCompact(q.price) : String("n/a");
+  int16_t priceWidth = tft.textWidth(priceText, priceFont);
+  int16_t priceLeft = COL_PRICE_XR - priceWidth;
+  if (priceLeft < 0) priceLeft = 0;
+
+  int16_t baseRight = priceLeft - PRICE_BASE_SPACING;
+  int16_t minBaseRight = COL_SYMBOL_X + 40;
+  if (baseRight < minBaseRight && priceLeft > minBaseRight + PRICE_BASE_SPACING) {
+    baseRight = minBaseRight;
+  }
+
+  tft.setTextColor(baseColor, bg);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(baseText, baseRight, priceBaseline, refFont);
+
+  tft.setTextColor(q.ok && !isnan(q.price) ? TFT_WHITE : TFT_RED, bg);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(priceText, COL_PRICE_XR, priceBaseline, priceFont);
 
   if (!q.ok || isnan(q.price)) {
-    tft.setTextColor(TFT_LIGHTGREY, bg);
-    tft.setTextDatum(BR_DATUM);
-    tft.drawString(formatPriceCompact(basePrices[idx]), COL_PRICE_XR, refBaseline, refFont);
-    tft.setTextColor(TFT_RED, bg);
-    tft.setTextDatum(BR_DATUM);
-    tft.drawString("n/a", COL_PRICE_XR, priceBaseline, priceFont);
     tft.setTextColor(TFT_LIGHTGREY, bg);
     tft.setTextDatum(BR_DATUM);
     tft.drawString("--",  COL_CHG_XR,   priceBaseline, priceFont);
     return;
   }
-
-  double base = basePrices[idx];
-  tft.setTextColor(TFT_LIGHTGREY, bg);
-  tft.setTextDatum(BR_DATUM);
-  tft.drawString(formatPriceCompact(base), COL_PRICE_XR, refBaseline, refFont);
-
-  tft.setTextColor(TFT_WHITE, bg);
-  tft.setTextDatum(BR_DATUM);
-  tft.drawString(formatPriceCompact(q.price), COL_PRICE_XR, priceBaseline, priceFont);
 
   double change = changeFromBase(idx, q.price);
   uint16_t col = TFT_LIGHTGREY;
@@ -868,7 +875,7 @@ void setup() {
   //turn display on in case only battery is attached
   pinMode(15, OUTPUT);
   digitalWrite(15, HIGH);
-  
+
   prefs.begin("display", false);
   loadSettings();                      // <-- zuerst laden!
 
