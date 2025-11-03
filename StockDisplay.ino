@@ -179,7 +179,7 @@ String formatPriceCompact(double value) {
   if (isnan(value)) return String("--");
   if (value == 0.0) return String("0");
 
-  const int significant = 4;
+  const int significant = 5;
   double absVal = fabs(value);
   int order = (int)floor(log10(absVal));
   double scale = pow(10.0, order - significant + 1);
