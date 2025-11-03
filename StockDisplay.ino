@@ -80,6 +80,7 @@ uint8_t wifiProfileCount = 0;
 int currentWifiProfile = -1;
 unsigned long lastWifiReconnectAttempt = 0;
 String symbols[4] = {"BTC-USD", "SOL-USD", "ETH-USD", "ADA-USD"};
+double basePrices[4] = {NAN, NAN, NAN, NAN};
 const uint8_t NUM_SYMBOLS = sizeof(symbols) / sizeof(symbols[0]);
 
 // Anzeigeparameter
@@ -101,7 +102,7 @@ float batteryVoltage = 0.0f;
 struct Quote {
   String symbol;
   double price = NAN;
-  double changePct = NAN; // CoinGecko: 24h change
+  double changePct = NAN; // legacy
   bool ok = false;
 };
 Quote quotes[4];
@@ -142,9 +143,17 @@ void drawHeader() {
   tft.setTextDatum(TL_DATUM);
   tft.drawString("Symbol", MARGIN, HEADER_H - 16, 2);
 
+  const int16_t headerLabelY = HEADER_H - 16;
+  const int priceFont = 2;
+  const int16_t priceLabelWidth = tft.textWidth("Preis", priceFont);
+
   tft.setTextDatum(TR_DATUM);
-  tft.drawString("Preis", COL_PRICE_XR, HEADER_H - 16, 2);
-  tft.drawString("Δ 24h", COL_CHG_XR,   HEADER_H - 16, 2);
+  tft.drawString("Preis", COL_PRICE_XR, headerLabelY, priceFont);
+
+  const int16_t refLabelX = COL_PRICE_XR - priceLabelWidth - 6;
+  tft.drawString("Ref", refLabelX, headerLabelY, priceFont);
+
+  tft.drawString("Δ Fix", COL_CHG_XR,   headerLabelY, priceFont);
 }
 
 String nowTime() {
@@ -158,6 +167,74 @@ String nowTime() {
 }
 
 
+String shortSymbol(const String& sym) {
+  if (sym.length() <= 3) return sym;
+  return sym.substring(0, 3);
+}
+
+String formatPriceCompact(double value) {
+  if (isnan(value)) return String("--");
+  if (value == 0.0) return String("0");
+
+  const int significant = 4;
+  double absVal = fabs(value);
+  int order = (int)floor(log10(absVal));
+  double scale = pow(10.0, order - significant + 1);
+  if (!isfinite(scale) || scale == 0.0) scale = 1.0;
+
+  double roundedAbs = round(absVal / scale) * scale;
+  double rounded = (value < 0.0) ? -roundedAbs : roundedAbs;
+  double absRounded = fabs(rounded);
+  if (absRounded == 0.0) return String("0");
+
+  int newOrder = (int)floor(log10(absRounded));
+  int decimals;
+  if (absRounded >= 1.0) {
+    int digitsBefore = newOrder + 1;
+    decimals = significant - digitsBefore;
+    if (decimals < 0) decimals = 0;
+  } else {
+    decimals = -newOrder + (significant - 1);
+  }
+
+  if (decimals > 8) decimals = 8;
+  if (decimals < 0) decimals = 0;
+
+  char buf[32];
+  dtostrf(rounded, 0, decimals, buf);
+  return String(buf);
+}
+
+double changeFromBase(uint8_t idx, double currentPrice) {
+  if (idx >= NUM_SYMBOLS) return NAN;
+  double base = basePrices[idx];
+  if (isnan(base) || base <= 0.0) return NAN;
+  if (isnan(currentPrice)) return NAN;
+  return ((currentPrice - base) / base) * 100.0;
+}
+
+int findSymbolIndexFromToken(const String& token) {
+  if (token.length() == 0) return -1;
+  bool numeric = true;
+  for (uint16_t i = 0; i < token.length(); ++i) {
+    if (!isDigit(token.charAt(i))) {
+      numeric = false;
+      break;
+    }
+  }
+  if (numeric) {
+    int idx = token.toInt();
+    if (idx >= 0 && idx < (int)NUM_SYMBOLS) return idx;
+  }
+
+  for (uint8_t i = 0; i < NUM_SYMBOLS; ++i) {
+    if (symbols[i].length() == 0) continue;
+    if (symbols[i].equalsIgnoreCase(token)) return i;
+    if (shortSymbol(symbols[i]).equalsIgnoreCase(token)) return i;
+  }
+  return -1;
+}
+
 void drawRow(uint8_t idx, const Quote& q) {
   if (idx >= ROWS) return;
   const int y = CONTENT_Y + idx * ROW_H;
@@ -166,36 +243,57 @@ void drawRow(uint8_t idx, const Quote& q) {
   uint16_t bg = (idx % 2 == 0) ? TFT_BLACK : tft.color565(10,10,10);
   tft.fillRect(0, y, SCREEN_W, h, bg);
 
-  tft.setTextDatum(TL_DATUM);
+  tft.setTextDatum(ML_DATUM);
   tft.setTextColor(TFT_CYAN, bg);
-  tft.drawString(symbols[idx], COL_SYMBOL_X, y + 2, 4);
+  tft.drawString(shortSymbol(symbols[idx]), COL_SYMBOL_X, y + h / 2, 4);
+
+  const int priceFont = 4;
+  const int refFont = 2;
+  const int priceHeight = tft.fontHeight(priceFont);
+  const int refHeight = tft.fontHeight(refFont);
+  const int priceBaseline = y + h - 2;
+  int refBaseline = priceBaseline - priceHeight - 4;
+  const int minRefBaseline = y + refHeight + 2;
+  if (refBaseline < minRefBaseline) refBaseline = minRefBaseline;
+
+  double base = basePrices[idx];
+  bool hasBase = (!isnan(base) && base > 0.0);
+  String baseText = hasBase ? formatPriceCompact(base) : String("--");
+  uint16_t baseColor = hasBase ? TFT_LIGHTGREY : tft.color565(60, 60, 60);
 
   if (!q.ok || isnan(q.price)) {
+    tft.setTextColor(baseColor, bg);
+    tft.setTextDatum(BR_DATUM);
+    tft.drawString(baseText, COL_PRICE_XR, refBaseline, refFont);
     tft.setTextColor(TFT_RED, bg);
-    tft.setTextDatum(TR_DATUM);
-    tft.drawString("n/a", COL_PRICE_XR, y + 2, 4);
-    tft.drawString("--",  COL_CHG_XR,   y + 2, 4);
+    tft.setTextDatum(BR_DATUM);
+    tft.drawString("n/a", COL_PRICE_XR, priceBaseline, priceFont);
+    tft.setTextColor(TFT_LIGHTGREY, bg);
+    tft.setTextDatum(BR_DATUM);
+    tft.drawString("--",  COL_CHG_XR,   priceBaseline, priceFont);
     return;
   }
 
-  char priceBuf[24];
-  if (q.price >= 1000.0)      dtostrf(q.price, 0, 0, priceBuf);
-  else if (q.price >= 10.0)   dtostrf(q.price, 0, 2, priceBuf);
-  else if (q.price >= 1.0)    dtostrf(q.price, 0, 3, priceBuf);
-  else                        dtostrf(q.price, 0, 5, priceBuf);
+  tft.setTextColor(baseColor, bg);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(baseText, COL_PRICE_XR, refBaseline, refFont);
 
   tft.setTextColor(TFT_WHITE, bg);
-  tft.setTextDatum(TR_DATUM);
-  tft.drawString(String(priceBuf), COL_PRICE_XR, y + 2, 4);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(formatPriceCompact(q.price), COL_PRICE_XR, priceBaseline, priceFont);
 
-  bool up = (!isnan(q.changePct) && q.changePct >= 0.0);
-  uint16_t col = up ? TFT_GREEN : TFT_RED;
+  double change = changeFromBase(idx, q.price);
+  uint16_t col = TFT_LIGHTGREY;
+  if (!isnan(change)) {
+    col = (change >= 0.0) ? TFT_GREEN : TFT_RED;
+  }
   char pctBuf[16];
-  if (isnan(q.changePct)) snprintf(pctBuf, sizeof(pctBuf), "--");
-  else snprintf(pctBuf, sizeof(pctBuf), "%+0.2f%%", q.changePct);
+  if (isnan(change)) snprintf(pctBuf, sizeof(pctBuf), "--");
+  else snprintf(pctBuf, sizeof(pctBuf), "%+0.1f%%", change);
 
   tft.setTextColor(col, bg);
-  tft.drawString(String(pctBuf), COL_CHG_XR, y + 2, 4);
+  tft.setTextDatum(BR_DATUM);
+  tft.drawString(String(pctBuf), COL_CHG_XR, y + h - 2, 4);
 }
 
 String batteryStatusText() {
@@ -365,6 +463,18 @@ void saveSettings() {
     aset += symbols[i];
   }
   prefs.putString("assets", aset);
+
+  String baseStr = "";
+  for (uint8_t i=0;i<NUM_SYMBOLS;i++){
+    if (i) baseStr += ",";
+    if (isnan(basePrices[i])) baseStr += "-";
+    else {
+      char buf[24];
+      dtostrf(basePrices[i], 0, 6, buf);
+      baseStr += String(buf);
+    }
+  }
+  prefs.putString("base_prices", baseStr);
 }
 
 void loadSettings() {
@@ -378,6 +488,27 @@ void loadSettings() {
     if (comma < 0) { symbols[idx++] = assetStr; break; }
     symbols[idx++] = assetStr.substring(0, comma);
     assetStr = assetStr.substring(comma + 1);
+  }
+
+  for (uint8_t i = 0; i < NUM_SYMBOLS; ++i) {
+    basePrices[i] = NAN;
+  }
+  String baseStr = prefs.getString("base_prices", "");
+  if (baseStr.length() > 0) {
+    int baseIdx = 0;
+    while (baseStr.length() > 0 && baseIdx < NUM_SYMBOLS) {
+      int comma = baseStr.indexOf(',');
+      String tok = (comma < 0) ? baseStr : baseStr.substring(0, comma);
+      tok.trim();
+      if (tok == "-") {
+        basePrices[baseIdx] = NAN;
+      } else if (tok.length() > 0) {
+        basePrices[baseIdx] = tok.toFloat();
+      }
+      baseIdx++;
+      if (comma < 0) break;
+      baseStr = baseStr.substring(comma + 1);
+    }
   }
 }
 
@@ -565,7 +696,7 @@ bool fetchCrypto(Quote* q, uint8_t n) {
   }
   if (!any) return true; // nichts zu holen
 
-  String url="https://api.coingecko.com/api/v3/simple/price?vs_currencies=usd&include_24hr_change=true&ids="+ids;
+  String url="https://api.coingecko.com/api/v3/simple/price?vs_currencies=usd&ids="+ids;
   WiFiClientSecure c; c.setInsecure();
   HTTPClient h; h.setUserAgent("Mozilla/5.0");
 
@@ -585,10 +716,9 @@ bool fetchCrypto(Quote* q, uint8_t n) {
     String id;
     if (isCrypto(symbols[i], id) && d.containsKey(id)) {
       double price = d[id]["usd"] | NAN;
-      double chg   = d[id]["usd_24h_change"] | NAN;
       q[i].symbol = symbols[i];
       q[i].price = price;
-      q[i].changePct = chg;
+      q[i].changePct = NAN;
       q[i].ok = !isnan(price);
     }
   }
@@ -612,6 +742,7 @@ void handleSerialCommands() {
     Serial.println("Aktuelle Assets:");
     for (uint8_t i=0;i<NUM_SYMBOLS;i++){
       Serial.print("  "); Serial.print(i); Serial.print(": "); Serial.println(symbols[i]);
+      Serial.print("     Basis: "); Serial.println(formatPriceCompact(basePrices[i]));
     }
     return;
   }
@@ -635,20 +766,74 @@ void handleSerialCommands() {
       if (comma < 0) break;
       list = list.substring(comma+1);
     }
+    String oldSymbols[4];
+    for (int i = 0; i < 4; ++i) oldSymbols[i] = symbols[i];
+
     // übernehmen & auffüllen
     for (int i=0;i<4;i++){
-      if (i < count) symbols[i] = newSyms[i];
-      else symbols[i] = "";
+      if (i < count) {
+        symbols[i] = newSyms[i];
+        if (!oldSymbols[i].equalsIgnoreCase(symbols[i])) {
+          basePrices[i] = NAN;
+        }
+      } else {
+        symbols[i] = "";
+        basePrices[i] = NAN;
+      }
     }
     saveSettings();
     Serial.println("✅ Assets gespeichert:");
     for (uint8_t i=0;i<NUM_SYMBOLS;i++){
       Serial.print("  "); Serial.print(i); Serial.print(": "); Serial.println(symbols[i]);
+      Serial.print("     Basis: "); Serial.println(formatPriceCompact(basePrices[i]));
     }
 
     // sofort neu laden & zeichnen
     fetchQuotesAll(quotes, NUM_SYMBOLS);
     redrawAll();
+    return;
+  }
+
+  if (line.startsWith("SET_BASE")) {
+    int sp = line.indexOf(' ');
+    if (sp < 0 || sp == (int)line.length() - 1) {
+      Serial.println("Syntax: SET_BASE <Index|Symbol> <Preis>  (z.B. SET_BASE BTC-USD 25000)");
+      return;
+    }
+    String rest = line.substring(sp + 1);
+    rest.trim();
+    int sp2 = rest.indexOf(' ');
+    if (sp2 < 0) {
+      Serial.println("Syntax: SET_BASE <Index|Symbol> <Preis>");
+      return;
+    }
+    String target = rest.substring(0, sp2);
+    String priceStr = rest.substring(sp2 + 1);
+    target.trim();
+    priceStr.trim();
+
+    int idx = findSymbolIndexFromToken(target);
+    if (idx < 0) {
+      Serial.println("❌ Symbol/Index nicht gefunden. Nutze 0-3 oder aktuellen Namen.");
+      return;
+    }
+
+    if (symbols[idx].length() == 0) {
+      Serial.println("❌ Für diesen Slot ist kein Symbol gesetzt.");
+      return;
+    }
+
+    double price = priceStr.toFloat();
+    if (price <= 0.0) {
+      basePrices[idx] = NAN;
+      Serial.printf("ℹ️ Basispreis für %s gelöscht.\n", symbols[idx].c_str());
+    } else {
+      basePrices[idx] = price;
+      String priceText = formatPriceCompact(price);
+      Serial.printf("✅ Basispreis für %s gesetzt: %s\n", symbols[idx].c_str(), priceText.c_str());
+    }
+    saveSettings();
+    drawRow(idx, quotes[idx]);
     return;
   }
 
@@ -676,7 +861,7 @@ void handleSerialCommands() {
     return;
   }
 
-  Serial.println("Unbekannter Befehl. Verfügbar: ASSETS? | SET_ASSETS ... | ADD_WIFI | RESET_WIFI");
+  Serial.println("Unbekannter Befehl. Verfügbar: ASSETS? | SET_ASSETS ... | SET_BASE ... | ADD_WIFI | RESET_WIFI");
 }
 
 // =================== SETUP & LOOP ===================
@@ -732,6 +917,7 @@ void setup() {
   Serial.println("Befehle:");
   Serial.println("  ASSETS?                      -> aktuelle Assetliste");
   Serial.println("  SET_ASSETS BTC-USD,ETH-USD  -> neue Liste setzen (1..4)");
+  Serial.println("  SET_BASE BTC-USD 25000      -> Basispreis setzen (0 löscht)");
   Serial.println("  ADD_WIFI                    -> weiteres WLAN speichern");
   Serial.println("  RESET_WIFI                   -> WLAN-Daten löschen");
 }
